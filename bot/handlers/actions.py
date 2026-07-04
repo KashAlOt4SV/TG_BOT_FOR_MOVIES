@@ -2,6 +2,13 @@ from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from bot.handlers.common import (
+    ensure_active_group,
+    require_groups,
+    set_active_and_get_group,
+    upsert_user_from_callback,
+    upsert_user_from_message,
+)
 from bot.handlers.utils import display_name
 from bot.keyboards import (
     action_vote_keyboard,
@@ -15,26 +22,6 @@ from bot.services.repository import Repository, normalize_username
 from bot.states import AddMember
 
 router = Router()
-
-
-async def _get_user(message_or_callback, repo: Repository) -> dict:
-    from_user = message_or_callback.from_user
-    return await repo.upsert_user(
-        telegram_id=from_user.id,
-        username=from_user.username,
-        first_name=from_user.first_name,
-    )
-
-
-async def _require_groups(message: Message, repo: Repository, user: dict) -> list[dict] | None:
-    groups = await repo.get_user_groups(user["id"])
-    if not groups:
-        await message.answer(
-            "У вас пока нет групп.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return None
-    return groups
 
 
 async def _send_action_votes(
@@ -86,27 +73,23 @@ async def _notify_group_members(
 
 @router.message(F.text == "🗑 Удалить из списка")
 async def start_remove_item(message: Message, repo: Repository) -> None:
-    user = await _get_user(message, repo)
-    groups = await _require_groups(message, repo, user)
-    if not groups:
-        return
-
-    if len(groups) == 1:
-        await _show_items_to_remove(message, repo, groups[0]["id"])
-        return
-
-    await message.answer(
-        "Выберите группу:",
-        reply_markup=group_select_keyboard(groups, "delgroup"),
+    user = await upsert_user_from_message(message, repo)
+    group = await ensure_active_group(
+        message, repo, user, callback_prefix="delgroup",
+        prompt="Из какой группы удалить?",
     )
+    if not group:
+        return
+
+    await _show_items_to_remove(message, repo, group["id"])
 
 
 @router.callback_query(F.data.startswith("delgroup:"))
 async def select_group_for_remove(callback: CallbackQuery, repo: Repository) -> None:
     group_id = int(callback.data.split(":")[1])
-    user = await repo.get_user_by_telegram_id(callback.from_user.id)
+    user = await upsert_user_from_callback(callback, repo)
 
-    if not user or not await repo.is_group_member(group_id, user["id"]):
+    if not await set_active_and_get_group(repo, user["id"], group_id):
         await callback.answer("Нет доступа.", show_alert=True)
         return
 
@@ -150,7 +133,7 @@ async def propose_remove_item(
     bot: Bot,
 ) -> None:
     item_id = int(callback.data.split(":")[1])
-    user = await _get_user(callback, repo)
+    user = await upsert_user_from_callback(callback, repo)
 
     item = await repo.get_watch_item(item_id)
     if not item:
@@ -195,35 +178,30 @@ async def propose_remove_item(
 
 @router.message(F.text == "⚙️ Управление группой")
 async def start_group_management(message: Message, repo: Repository) -> None:
-    user = await _get_user(message, repo)
-    groups = await _require_groups(message, repo, user)
-    if not groups:
-        return
-
-    if len(groups) == 1:
-        group = groups[0]
-        await message.answer(
-            f"<b>{group['name']}</b>\n\nВыберите действие:",
-            reply_markup=group_management_keyboard(group["id"]),
-        )
+    user = await upsert_user_from_message(message, repo)
+    group = await ensure_active_group(
+        message, repo, user, callback_prefix="mgmtgroup",
+        prompt="Какой группой управлять?",
+    )
+    if not group:
         return
 
     await message.answer(
-        "Выберите группу:",
-        reply_markup=group_select_keyboard(groups, "mgmtgroup"),
+        f"<b>{group['name']}</b>\n\nВыберите действие:",
+        reply_markup=group_management_keyboard(group["id"]),
     )
 
 
 @router.callback_query(F.data.startswith("mgmtgroup:"))
 async def select_group_for_management(callback: CallbackQuery, repo: Repository) -> None:
     group_id = int(callback.data.split(":")[1])
-    user = await repo.get_user_by_telegram_id(callback.from_user.id)
+    user = await upsert_user_from_callback(callback, repo)
 
-    if not user or not await repo.is_group_member(group_id, user["id"]):
+    group = await set_active_and_get_group(repo, user["id"], group_id)
+    if not group:
         await callback.answer("Нет доступа.", show_alert=True)
         return
 
-    group = await repo.get_group(group_id)
     await callback.message.edit_text(
         f"<b>{group['name']}</b>\n\nВыберите действие:",
         reply_markup=group_management_keyboard(group_id),
@@ -238,9 +216,9 @@ async def start_add_member(
     repo: Repository,
 ) -> None:
     group_id = int(callback.data.split(":")[2])
-    user = await repo.get_user_by_telegram_id(callback.from_user.id)
+    user = await upsert_user_from_callback(callback, repo)
 
-    if not user or not await repo.is_group_member(group_id, user["id"]):
+    if not await repo.is_group_member(group_id, user["id"]):
         await callback.answer("Нет доступа.", show_alert=True)
         return
 
@@ -252,7 +230,7 @@ async def start_add_member(
         "Отправьте @username человека, которого хотите добавить.\n"
         "Он должен хотя бы раз написать боту /start.\n\n"
         "Добавление — по согласию всех текущих участников.\n"
-        "Отмена: /cancel",
+        "Отмена: /cancel или любая кнопка меню",
     )
     await callback.answer()
 
@@ -276,7 +254,7 @@ async def process_add_member(
         await message.answer("Не удалось распознать username. Пример: @friend")
         return
 
-    user = await _get_user(message, repo)
+    user = await upsert_user_from_message(message, repo)
     target = await repo.get_user_by_username(username)
 
     if not target:
@@ -320,9 +298,9 @@ async def process_add_member(
 @router.callback_query(F.data.startswith("mgmt:remove:"))
 async def start_remove_member(callback: CallbackQuery, repo: Repository) -> None:
     group_id = int(callback.data.split(":")[2])
-    user = await repo.get_user_by_telegram_id(callback.from_user.id)
+    user = await upsert_user_from_callback(callback, repo)
 
-    if not user or not await repo.is_group_member(group_id, user["id"]):
+    if not await repo.is_group_member(group_id, user["id"]):
         await callback.answer("Нет доступа.", show_alert=True)
         return
 
@@ -350,7 +328,7 @@ async def propose_remove_member(
     parts = callback.data.split(":")
     group_id = int(parts[1])
     target_user_id = int(parts[2])
-    user = await _get_user(callback, repo)
+    user = await upsert_user_from_callback(callback, repo)
 
     if not await repo.is_group_member(group_id, user["id"]):
         await callback.answer("Нет доступа.", show_alert=True)
@@ -397,7 +375,7 @@ async def handle_action_vote(
     approved = parts[1] == "approve"
     action_id = int(parts[2])
 
-    user = await _get_user(callback, repo)
+    user = await upsert_user_from_callback(callback, repo)
     result = await repo.vote_on_group_action(action_id, user["id"], approved)
 
     if not result:

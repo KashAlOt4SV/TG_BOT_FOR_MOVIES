@@ -4,9 +4,12 @@ MAIN_MENU_BUTTONS = [
     ["🎬 Что посмотреть сегодня", "📺 Что смотрим"],
     ["➕ Предложить фильм", "🗑 Удалить из списка"],
     ["✅ Отметить просмотренным", "📋 Списки"],
+    ["🔄 Сменить группу", "🤝 Создать группу"],
     ["👥 Мои группы", "⚙️ Управление группой"],
-    ["🤝 Создать группу", "❓ Помощь"],
+    ["❓ Помощь"],
 ]
+
+MENU_BUTTON_TEXTS = frozenset(btn for row in MAIN_MENU_BUTTONS for btn in row)
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -16,14 +19,18 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def group_select_keyboard(groups: list[dict], prefix: str) -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(
-            text=f"{g['name']} ({g['member_count']} чел.)",
+def group_select_keyboard(
+    groups: list[dict],
+    prefix: str,
+    active_group_id: int | None = None,
+) -> InlineKeyboardMarkup:
+    buttons = []
+    for g in groups:
+        marker = "✓ " if g["id"] == active_group_id else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"{marker}{g['name']} ({g['member_count']} чел.)",
             callback_data=f"{prefix}:{g['id']}",
-        )]
-        for g in groups
-    ]
+        )])
     buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

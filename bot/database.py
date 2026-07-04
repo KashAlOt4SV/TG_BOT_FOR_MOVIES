@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS users (
     telegram_id INTEGER NOT NULL UNIQUE,
     username TEXT,
     first_name TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    active_group_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (active_group_id) REFERENCES groups(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS groups (
@@ -132,3 +134,15 @@ class Database:
         async with self.connection() as conn:
             await conn.executescript(SCHEMA)
             await conn.commit()
+        await self._migrate()
+
+    async def _migrate(self) -> None:
+        async with self.connection() as conn:
+            cursor = await conn.execute("PRAGMA table_info(users)")
+            columns = {row[1] for row in await cursor.fetchall()}
+            if "active_group_id" not in columns:
+                await conn.execute(
+                    "ALTER TABLE users ADD COLUMN active_group_id INTEGER "
+                    "REFERENCES groups(id) ON DELETE SET NULL"
+                )
+                await conn.commit()

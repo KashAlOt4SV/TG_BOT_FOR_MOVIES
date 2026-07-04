@@ -9,7 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from bot.config import load_config
 from bot.database import Database
 from bot.handlers import actions, groups, media, start, watch
-from bot.middlewares import RepositoryMiddleware
+from bot.middlewares import RepositoryMiddleware, ResetStateOnMenuMiddleware
 from bot.services.repository import Repository
 
 logging.basicConfig(
@@ -30,6 +30,7 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
+    dp.update.middleware(ResetStateOnMenuMiddleware())
     dp.update.middleware(RepositoryMiddleware(repo))
 
     dp.include_router(start.router)

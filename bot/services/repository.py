@@ -88,6 +88,14 @@ class Repository:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
+    async def set_active_group(self, user_id: int, group_id: int | None) -> None:
+        async with self.db.connection() as conn:
+            await conn.execute(
+                "UPDATE users SET active_group_id = ? WHERE id = ?",
+                (group_id, user_id),
+            )
+            await conn.commit()
+
     async def get_group_members(self, group_id: int) -> list[dict[str, Any]]:
         async with self.db.connection() as conn:
             cursor = await conn.execute(

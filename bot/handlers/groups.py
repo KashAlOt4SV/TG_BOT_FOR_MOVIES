@@ -2,17 +2,18 @@ from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from bot.handlers.common import (
+    require_groups,
+    set_active_and_get_group,
+    upsert_user_from_callback,
+    upsert_user_from_message,
+)
+from bot.handlers.utils import display_name
 from bot.keyboards import group_select_keyboard, invite_keyboard, main_menu_keyboard
 from bot.services.repository import Repository, parse_usernames
 from bot.states import GroupCreation
 
 router = Router()
-
-
-def _display_name(user: dict) -> str:
-    if user.get("username"):
-        return f"@{user['username']}"
-    return user.get("first_name") or "Пользователь"
 
 
 @router.message(F.text == "🤝 Создать группу")
@@ -22,7 +23,7 @@ async def start_group_creation(message: Message, state: FSMContext) -> None:
         "Отправьте @username людей, с которыми хотите создать группу.\n\n"
         "Пример: <code>@wife @friend</code>\n\n"
         "⚠️ Каждый приглашённый должен хотя бы раз написать боту /start.\n"
-        "Отмена: /cancel",
+        "Отмена: /cancel или любая кнопка меню",
     )
 
 
@@ -33,16 +34,13 @@ async def process_usernames(
     repo: Repository,
     bot: Bot,
 ) -> None:
-    creator = await repo.upsert_user(
-        telegram_id=message.from_user.id,
-        username=message.from_user.username,
-        first_name=message.from_user.first_name,
-    )
+    creator = await upsert_user_from_message(message, repo)
 
     usernames = parse_usernames(message.text or "")
     if not usernames:
         await message.answer(
-            "Не удалось распознать username. Попробуйте снова, например: @friend"
+            "Не удалось распознать username. Попробуйте снова, например: @friend\n"
+            "Или нажмите любую кнопку меню, чтобы отменить."
         )
         return
 
@@ -81,7 +79,7 @@ async def process_usernames(
 
     await state.clear()
 
-    creator_label = _display_name(creator)
+    creator_label = display_name(creator)
     for invitee in found_users:
         invite_row = await repo.get_invite_for_formation(formation["id"], invitee["id"])
         if not invite_row:
@@ -98,7 +96,7 @@ async def process_usernames(
 
     lines = [f"✅ Приглашения отправлены ({len(found_users)} чел.):"]
     for u in found_users:
-        lines.append(f"  • {_display_name(u)}")
+        lines.append(f"  • {display_name(u)}")
 
     if not_found:
         lines.append("")
@@ -112,6 +110,38 @@ async def process_usernames(
     await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
 
 
+@router.message(F.text == "🔄 Сменить группу")
+async def switch_group(message: Message, repo: Repository) -> None:
+    user = await upsert_user_from_message(message, repo)
+    groups = await require_groups(message, repo, user)
+    if not groups:
+        return
+
+    active_id = user.get("active_group_id")
+    await message.answer(
+        "Выберите активную группу.\n"
+        "Все действия (фильмы, списки, рандом) будут относиться к ней.",
+        reply_markup=group_select_keyboard(groups, "setgroup", active_id),
+    )
+
+
+@router.callback_query(F.data.startswith("setgroup:"))
+async def set_active_group_handler(callback: CallbackQuery, repo: Repository) -> None:
+    group_id = int(callback.data.split(":")[1])
+    user = await upsert_user_from_callback(callback, repo)
+
+    group = await set_active_and_get_group(repo, user["id"], group_id)
+    if not group:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        f"✅ Активная группа: <b>{group['name']}</b>\n\n"
+        "Теперь все действия будут выполняться в этой группе."
+    )
+    await callback.answer("Группа выбрана!")
+
+
 @router.callback_query(F.data.startswith("invite:"))
 async def handle_invite_response(
     callback: CallbackQuery,
@@ -123,12 +153,7 @@ async def handle_invite_response(
     invite_id = int(parts[2])
     accepted = action == "accept"
 
-    user = await repo.upsert_user(
-        telegram_id=callback.from_user.id,
-        username=callback.from_user.username,
-        first_name=callback.from_user.first_name,
-    )
-
+    user = await upsert_user_from_callback(callback, repo)
     result = await repo.respond_to_invite(invite_id, user["id"], accepted)
 
     if not result:
@@ -149,9 +174,11 @@ async def handle_invite_response(
     formation_id = result["formation_id"]
     telegram_ids = await repo.get_formation_participants_telegram_ids(formation_id)
 
+    await repo.set_active_group(user["id"], group["id"])
+
     notify_text = (
         f"🎉 Группа «{group['name']}» создана!\n\n"
-        "Теперь можно предлагать фильмы через «➕ Предложить фильм»."
+        "Она выбрана как активная. Можно предлагать фильмы через «➕ Предложить фильм»."
     )
 
     for tg_id in telegram_ids:
@@ -166,25 +193,24 @@ async def handle_invite_response(
 
 @router.message(F.text == "👥 Мои группы")
 async def show_my_groups(message: Message, repo: Repository) -> None:
-    user = await repo.upsert_user(
-        telegram_id=message.from_user.id,
-        username=message.from_user.username,
-        first_name=message.from_user.first_name,
-    )
-    groups = await repo.get_user_groups(user["id"])
-
+    user = await upsert_user_from_message(message, repo)
+    groups = await require_groups(message, repo, user)
     if not groups:
-        await message.answer(
-            "У вас пока нет групп.\nНажмите «🤝 Создать группу», чтобы начать.",
-            reply_markup=main_menu_keyboard(),
-        )
         return
 
+    active_id = user.get("active_group_id")
     lines = ["<b>👥 Ваши группы:</b>\n"]
+    if len(groups) > 1:
+        lines.append("📌 — активная группа\n")
+
     for g in groups:
         members = await repo.get_group_members(g["id"])
-        member_names = ", ".join(_display_name(m) for m in members)
-        lines.append(f"• <b>{g['name']}</b> ({g['member_count']} чел.)")
+        member_names = ", ".join(display_name(m) for m in members)
+        prefix = "📌 " if g["id"] == active_id else ""
+        lines.append(f"• {prefix}<b>{g['name']}</b> ({g['member_count']} чел.)")
         lines.append(f"  {member_names}\n")
+
+    if len(groups) > 1:
+        lines.append("Сменить активную группу: «🔄 Сменить группу»")
 
     await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())

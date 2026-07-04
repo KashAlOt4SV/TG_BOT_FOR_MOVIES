@@ -2,61 +2,37 @@ from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.keyboards import (
-    group_detail_keyboard,
-    group_select_keyboard,
-    main_menu_keyboard,
-    proposal_vote_keyboard,
+from bot.handlers.common import (
+    active_group_label,
+    ensure_active_group,
+    set_active_and_get_group,
+    upsert_user_from_callback,
+    upsert_user_from_message,
 )
+from bot.handlers.utils import display_name
+from bot.keyboards import main_menu_keyboard, proposal_vote_keyboard
 from bot.services.repository import Repository
 from bot.states import MediaProposal
 
 router = Router()
 
 
-def _display_name(user: dict) -> str:
-    if user.get("username"):
-        return f"@{user['username']}"
-    return user.get("first_name") or "Пользователь"
-
-
-def _status_label(status: str) -> str:
-    return {
-        "queued": "📋 В очереди",
-        "watching": "📺 Смотрим",
-        "completed": "✅ Просмотрено",
-    }.get(status, status)
-
-
 @router.message(F.text == "➕ Предложить фильм")
 async def start_proposal(message: Message, state: FSMContext, repo: Repository) -> None:
-    user = await repo.upsert_user(
-        telegram_id=message.from_user.id,
-        username=message.from_user.username,
-        first_name=message.from_user.first_name,
+    user = await upsert_user_from_message(message, repo)
+    group = await ensure_active_group(
+        message, repo, user, callback_prefix="propose",
+        prompt="Для какой группы предложить фильм?",
     )
-    groups = await repo.get_user_groups(user["id"])
-
-    if not groups:
-        await message.answer(
-            "Сначала создайте или присоединитесь к группе.",
-            reply_markup=main_menu_keyboard(),
-        )
+    if not group:
         return
 
-    if len(groups) == 1:
-        await state.set_state(MediaProposal.waiting_title)
-        await state.update_data(group_id=groups[0]["id"])
-        await message.answer(
-            f"Группа: <b>{groups[0]['name']}</b>\n\n"
-            "Отправьте название фильма, сериала или аниме.\n"
-            "Отмена: /cancel",
-        )
-        return
-
+    await state.set_state(MediaProposal.waiting_title)
+    await state.update_data(group_id=group["id"])
     await message.answer(
-        "Выберите группу:",
-        reply_markup=group_select_keyboard(groups, "propose"),
+        f"Группа: <b>{group['name']}</b>\n\n"
+        "Отправьте название фильма, сериала или аниме.\n"
+        "Отмена: /cancel или любая кнопка меню",
     )
 
 
@@ -67,19 +43,19 @@ async def select_group_for_proposal(
     repo: Repository,
 ) -> None:
     group_id = int(callback.data.split(":")[1])
-    user = await repo.get_user_by_telegram_id(callback.from_user.id)
+    user = await upsert_user_from_callback(callback, repo)
 
-    if not user or not await repo.is_group_member(group_id, user["id"]):
+    group = await set_active_and_get_group(repo, user["id"], group_id)
+    if not group:
         await callback.answer("Нет доступа к этой группе.", show_alert=True)
         return
 
-    group = await repo.get_group(group_id)
     await state.set_state(MediaProposal.waiting_title)
     await state.update_data(group_id=group_id)
     await callback.message.edit_text(
         f"Группа: <b>{group['name']}</b>\n\n"
         "Отправьте название фильма, сериала или аниме.\n"
-        "Отмена: /cancel",
+        "Отмена: /cancel или любая кнопка меню",
     )
     await callback.answer()
 
@@ -106,21 +82,17 @@ async def process_proposal_title(
         await message.answer("Ошибка: группа не выбрана. Начните заново.")
         return
 
-    user = await repo.upsert_user(
-        telegram_id=message.from_user.id,
-        username=message.from_user.username,
-        first_name=message.from_user.first_name,
-    )
-
+    user = await upsert_user_from_message(message, repo)
     proposal = await repo.create_media_proposal(group_id, user["id"], title)
     group = await repo.get_group(group_id)
     members = await repo.get_group_members(group_id)
 
     await state.clear()
 
-    proposer_label = _display_name(user)
+    proposer_label = display_name(user)
     await message.answer(
-        f"✅ Предложение «<b>{title}</b>» отправлено на голосование в группе «{group['name']}».",
+        f"✅ Предложение «<b>{title}</b>» отправлено на голосование "
+        f"в группе «{group['name']}».",
         reply_markup=main_menu_keyboard(),
     )
 
@@ -155,12 +127,7 @@ async def handle_proposal_vote(
     proposal_id = int(parts[2])
     approved = action == "approve"
 
-    user = await repo.upsert_user(
-        telegram_id=callback.from_user.id,
-        username=callback.from_user.username,
-        first_name=callback.from_user.first_name,
-    )
-
+    user = await upsert_user_from_callback(callback, repo)
     result = await repo.vote_on_proposal(proposal_id, user["id"], approved)
     if not result:
         await callback.answer("Голосование недоступно.", show_alert=True)
@@ -168,7 +135,7 @@ async def handle_proposal_vote(
 
     proposal = result["proposal"]
     group = await repo.get_group(proposal["group_id"])
-    voter_label = _display_name(user)
+    voter_label = display_name(user)
 
     if result["action"] == "rejected":
         await callback.message.edit_text(
@@ -210,36 +177,23 @@ async def handle_proposal_vote(
 
 @router.message(F.text == "📋 Списки")
 async def show_lists_menu(message: Message, repo: Repository) -> None:
-    user = await repo.upsert_user(
-        telegram_id=message.from_user.id,
-        username=message.from_user.username,
-        first_name=message.from_user.first_name,
+    user = await upsert_user_from_message(message, repo)
+    group = await ensure_active_group(
+        message, repo, user, callback_prefix="lists",
+        prompt="Списки какой группы показать?",
     )
-    groups = await repo.get_user_groups(user["id"])
-
-    if not groups:
-        await message.answer(
-            "У вас пока нет групп.",
-            reply_markup=main_menu_keyboard(),
-        )
+    if not group:
         return
 
-    if len(groups) == 1:
-        await _send_group_lists(message, repo, groups[0]["id"])
-        return
-
-    await message.answer(
-        "Выберите группу для просмотра списков:",
-        reply_markup=group_select_keyboard(groups, "lists"),
-    )
+    await _send_group_lists(message, repo, group["id"])
 
 
 @router.callback_query(F.data.startswith("lists:"))
 async def select_group_for_lists(callback: CallbackQuery, repo: Repository) -> None:
     group_id = int(callback.data.split(":")[1])
-    user = await repo.get_user_by_telegram_id(callback.from_user.id)
+    user = await upsert_user_from_callback(callback, repo)
 
-    if not user or not await repo.is_group_member(group_id, user["id"]):
+    if not await set_active_and_get_group(repo, user["id"], group_id):
         await callback.answer("Нет доступа.", show_alert=True)
         return
 
@@ -253,8 +207,8 @@ async def show_list_section(callback: CallbackQuery, repo: Repository) -> None:
     status = parts[1]
     group_id = int(parts[2])
 
-    user = await repo.get_user_by_telegram_id(callback.from_user.id)
-    if not user or not await repo.is_group_member(group_id, user["id"]):
+    user = await upsert_user_from_callback(callback, repo)
+    if not await repo.is_group_member(group_id, user["id"]):
         await callback.answer("Нет доступа.", show_alert=True)
         return
 
@@ -275,6 +229,7 @@ async def show_list_section(callback: CallbackQuery, repo: Repository) -> None:
             lines.append(f"{i}. {item['title']}")
         text = "\n".join(lines)
 
+    from bot.keyboards import group_detail_keyboard
     await callback.message.edit_text(text, reply_markup=group_detail_keyboard(group_id))
     await callback.answer()
 
@@ -285,12 +240,14 @@ async def _send_group_lists(
     group_id: int,
     edit: bool = False,
 ) -> None:
+    from bot.keyboards import group_detail_keyboard
+
     group = await repo.get_group(group_id)
     queued = await repo.get_watch_items(group_id, "queued")
     watching = await repo.get_watch_items(group_id, "watching")
     completed = await repo.get_watch_items(group_id, "completed")
 
-    lines = [f"<b>{group['name']}</b>", ""]
+    lines = [f"<b>{active_group_label(group)}</b>", ""]
 
     lines.append(f"📺 Сейчас смотрим: {watching[0]['title'] if watching else '—'}")
     lines.append("")
@@ -320,4 +277,4 @@ async def _send_group_lists(
     if edit:
         await message.edit_text(text, reply_markup=markup)
     else:
-        await message.answer(text, reply_markup=markup, reply_to_message_id=None)
+        await message.answer(text, reply_markup=markup)

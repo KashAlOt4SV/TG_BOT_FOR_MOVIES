@@ -1,48 +1,39 @@
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 
-from bot.keyboards import group_select_keyboard, main_menu_keyboard
+from bot.handlers.common import (
+    active_group_label,
+    ensure_active_group,
+    set_active_and_get_group,
+    upsert_user_from_callback,
+    upsert_user_from_message,
+)
+from bot.keyboards import main_menu_keyboard
 from bot.services.repository import Repository
 
 router = Router()
 
 
-async def _get_user_groups(message: Message, repo: Repository):
-    return await repo.upsert_user(
-        telegram_id=message.from_user.id,
-        username=message.from_user.username,
-        first_name=message.from_user.first_name,
-    )
-
-
 @router.message(F.text == "🎬 Что посмотреть сегодня")
 async def pick_random(message: Message, repo: Repository) -> None:
-    user = await _get_user_groups(message, repo)
-    groups = await repo.get_user_groups(user["id"])
-
-    if not groups:
-        await message.answer(
-            "Сначала создайте или присоединитесь к группе.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    if len(groups) == 1:
-        await _do_pick_random(message, repo, groups[0]["id"])
-        return
-
-    await message.answer(
-        "Выберите группу:",
-        reply_markup=group_select_keyboard(groups, "pick"),
+    user = await upsert_user_from_message(message, repo)
+    group = await ensure_active_group(
+        message, repo, user, callback_prefix="pick",
+        prompt="Для какой группы выбрать фильм?",
     )
+    if not group:
+        return
+
+    await _do_pick_random(message, repo, group["id"])
 
 
 @router.callback_query(F.data.startswith("pick:"))
 async def pick_random_for_group(callback: CallbackQuery, repo: Repository) -> None:
     group_id = int(callback.data.split(":")[1])
-    user = await repo.get_user_by_telegram_id(callback.from_user.id)
+    user = await upsert_user_from_callback(callback, repo)
 
-    if not user or not await repo.is_group_member(group_id, user["id"]):
+    group = await set_active_and_get_group(repo, user["id"], group_id)
+    if not group:
         await callback.answer("Нет доступа.", show_alert=True)
         return
 
@@ -61,21 +52,21 @@ async def _do_pick_random(
 
     if result is None:
         text = (
-            f"<b>{group['name']}</b>\n\n"
+            f"<b>{active_group_label(group)}</b>\n\n"
             "📭 Список на просмотр пуст.\n"
             "Добавьте фильмы через «➕ Предложить фильм»."
         )
     elif result["action"] == "already_watching":
         item = result["item"]
         text = (
-            f"<b>{group['name']}</b>\n\n"
+            f"<b>{active_group_label(group)}</b>\n\n"
             f"📺 Уже выбрано для просмотра:\n<b>{item['title']}</b>\n\n"
             "Отметьте просмотренным, когда досмотрите."
         )
     else:
         item = result["item"]
         text = (
-            f"<b>{group['name']}</b>\n\n"
+            f"<b>{active_group_label(group)}</b>\n\n"
             f"🎲 Сегодня смотрим:\n<b>{item['title']}</b>"
         )
 
@@ -87,32 +78,23 @@ async def _do_pick_random(
 
 @router.message(F.text == "📺 Что смотрим")
 async def show_current(message: Message, repo: Repository) -> None:
-    user = await _get_user_groups(message, repo)
-    groups = await repo.get_user_groups(user["id"])
-
-    if not groups:
-        await message.answer(
-            "У вас пока нет групп.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    if len(groups) == 1:
-        await _show_current_for_group(message, repo, groups[0]["id"])
-        return
-
-    await message.answer(
-        "Выберите группу:",
-        reply_markup=group_select_keyboard(groups, "current"),
+    user = await upsert_user_from_message(message, repo)
+    group = await ensure_active_group(
+        message, repo, user, callback_prefix="current",
+        prompt="Для какой группы показать текущий просмотр?",
     )
+    if not group:
+        return
+
+    await _show_current_for_group(message, repo, group["id"])
 
 
 @router.callback_query(F.data.startswith("current:"))
 async def show_current_for_group(callback: CallbackQuery, repo: Repository) -> None:
     group_id = int(callback.data.split(":")[1])
-    user = await repo.get_user_by_telegram_id(callback.from_user.id)
+    user = await upsert_user_from_callback(callback, repo)
 
-    if not user or not await repo.is_group_member(group_id, user["id"]):
+    if not await set_active_and_get_group(repo, user["id"], group_id):
         await callback.answer("Нет доступа.", show_alert=True)
         return
 
@@ -131,50 +113,41 @@ async def _show_current_for_group(
 
     if item:
         text = (
-            f"<b>{group['name']}</b>\n\n"
+            f"<b>{active_group_label(group)}</b>\n\n"
             f"📺 Сейчас смотрим:\n<b>{item['title']}</b>"
         )
     else:
         text = (
-            f"<b>{group['name']}</b>\n\n"
+            f"<b>{active_group_label(group)}</b>\n\n"
             "Сейчас ничего не выбрано.\n"
             "Нажмите «🎬 Что посмотреть сегодня»."
         )
 
     if edit:
-        await message.edit_text(text)
+        await message.edit_text(text, reply_markup=main_menu_keyboard())
     else:
         await message.answer(text, reply_markup=main_menu_keyboard())
 
 
 @router.message(F.text == "✅ Отметить просмотренным")
 async def mark_completed(message: Message, repo: Repository) -> None:
-    user = await _get_user_groups(message, repo)
-    groups = await repo.get_user_groups(user["id"])
-
-    if not groups:
-        await message.answer(
-            "У вас пока нет групп.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    if len(groups) == 1:
-        await _do_mark_completed(message, repo, groups[0]["id"])
-        return
-
-    await message.answer(
-        "Выберите группу:",
-        reply_markup=group_select_keyboard(groups, "complete"),
+    user = await upsert_user_from_message(message, repo)
+    group = await ensure_active_group(
+        message, repo, user, callback_prefix="complete",
+        prompt="Для какой группы отметить просмотренным?",
     )
+    if not group:
+        return
+
+    await _do_mark_completed(message, repo, group["id"])
 
 
 @router.callback_query(F.data.startswith("complete:"))
 async def mark_completed_for_group(callback: CallbackQuery, repo: Repository) -> None:
     group_id = int(callback.data.split(":")[1])
-    user = await repo.get_user_by_telegram_id(callback.from_user.id)
+    user = await upsert_user_from_callback(callback, repo)
 
-    if not user or not await repo.is_group_member(group_id, user["id"]):
+    if not await set_active_and_get_group(repo, user["id"], group_id):
         await callback.answer("Нет доступа.", show_alert=True)
         return
 
@@ -193,17 +166,17 @@ async def _do_mark_completed(
 
     if item:
         text = (
-            f"<b>{group['name']}</b>\n\n"
+            f"<b>{active_group_label(group)}</b>\n\n"
             f"✅ «{item['title']}» отмечен как просмотренный.\n"
             "Он больше не будет выпадать в случайном выборе."
         )
     else:
         text = (
-            f"<b>{group['name']}</b>\n\n"
+            f"<b>{active_group_label(group)}</b>\n\n"
             "Нечего отмечать — сейчас ничего не выбрано для просмотра."
         )
 
     if edit:
-        await message.edit_text(text)
+        await message.edit_text(text, reply_markup=main_menu_keyboard())
     else:
         await message.answer(text, reply_markup=main_menu_keyboard())
