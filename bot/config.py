@@ -11,6 +11,8 @@ load_dotenv()
 class Config:
     bot_token: str
     database_path: Path
+    kinopoisk_api_key: str | None
+    omdb_api_key: str | None
 
 
 def load_config() -> Config:
@@ -21,4 +23,12 @@ def load_config() -> Config:
     db_path = Path(os.getenv("DATABASE_PATH", "data/bot.db"))
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    return Config(bot_token=token, database_path=db_path)
+    kp_key = os.getenv("KINOPOISK_API_KEY", "").strip() or None
+    omdb_key = os.getenv("OMDB_API_KEY", "").strip() or None
+
+    return Config(
+        bot_token=token,
+        database_path=db_path,
+        kinopoisk_api_key=kp_key,
+        omdb_api_key=omdb_key,
+    )

@@ -12,6 +12,7 @@ from bot.handlers.common import (
 )
 from bot.handlers.utils import display_name
 from bot.keyboards import main_menu_keyboard, proposal_vote_keyboard
+from bot.services.movie_lookup import MovieLookupService, format_lookup_message
 from bot.services.repository import Repository
 from bot.states import MediaProposal
 
@@ -117,6 +118,38 @@ async def process_proposal_title(
             pass
 
 
+@router.callback_query(F.data.startswith("proposal:info:"))
+async def show_proposal_info(
+    callback: CallbackQuery,
+    repo: Repository,
+    movie_lookup: MovieLookupService,
+) -> None:
+    proposal_id = int(callback.data.split(":")[2])
+    user = await upsert_user_from_callback(callback, repo)
+
+    proposal = await repo.get_proposal(proposal_id)
+    if not proposal:
+        await callback.answer("Предложение не найдено.", show_alert=True)
+        return
+
+    if not await repo.is_group_member(proposal["group_id"], user["id"]):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+
+    await callback.answer("Ищу информацию…")
+
+    members = await repo.get_group_members(proposal["group_id"])
+    proposer = next(
+        (m for m in members if m["id"] == proposal["proposer_id"]),
+        None,
+    )
+    proposer_label = display_name(proposer) if proposer else None
+
+    result = await movie_lookup.lookup(proposal["title"])
+    text = format_lookup_message(result, proposer_hint=proposer_label)
+    await callback.message.answer(text)
+
+
 @router.callback_query(F.data.startswith("proposal:"))
 async def handle_proposal_vote(
     callback: CallbackQuery,
@@ -125,6 +158,8 @@ async def handle_proposal_vote(
 ) -> None:
     parts = callback.data.split(":")
     action = parts[1]
+    if action == "info":
+        return
     proposal_id = int(parts[2])
     approved = action == "approve"
 
@@ -233,6 +268,7 @@ async def show_list_section(callback: CallbackQuery, repo: Repository) -> None:
         "queued": "📋 Очередь на просмотр",
         "watching": "📺 Сейчас смотрим",
         "completed": "✅ Просмотрено",
+        "dropped": "🚫 Бросили",
     }
 
     if not items:
@@ -260,6 +296,7 @@ async def _send_group_lists(
     queued = await repo.get_watch_items(group_id, "queued")
     watching = await repo.get_watch_items(group_id, "watching")
     completed = await repo.get_watch_items(group_id, "completed")
+    dropped = await repo.get_watch_items(group_id, "dropped")
 
     lines = [f"<b>{active_group_label(group)}</b>", ""]
 
@@ -282,6 +319,16 @@ async def _send_group_lists(
             lines.append(f"  {i}. {item['title']}")
         if len(completed) > 10:
             lines.append(f"  (показаны последние 10 из {len(completed)})")
+    else:
+        lines.append("  —")
+
+    lines.append("")
+    lines.append(f"🚫 Бросили ({len(dropped)}):")
+    if dropped:
+        for i, item in enumerate(dropped[-10:], 1):
+            lines.append(f"  {i}. {item['title']}")
+        if len(dropped) > 10:
+            lines.append(f"  (показаны последние 10 из {len(dropped)})")
     else:
         lines.append("  —")
 

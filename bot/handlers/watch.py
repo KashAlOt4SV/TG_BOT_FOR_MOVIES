@@ -180,3 +180,56 @@ async def _do_mark_completed(
         await message.edit_text(text, reply_markup=main_menu_keyboard())
     else:
         await message.answer(text, reply_markup=main_menu_keyboard())
+
+
+@router.message(F.text == "🚫 Бросили")
+async def mark_dropped(message: Message, repo: Repository) -> None:
+    user = await upsert_user_from_message(message, repo)
+    group = await ensure_active_group(
+        message, repo, user, callback_prefix="drop",
+        prompt="Для какой группы отметить «бросили»?",
+    )
+    if not group:
+        return
+
+    await _do_mark_dropped(message, repo, group["id"])
+
+
+@router.callback_query(F.data.startswith("drop:"))
+async def mark_dropped_for_group(callback: CallbackQuery, repo: Repository) -> None:
+    group_id = int(callback.data.split(":")[1])
+    user = await upsert_user_from_callback(callback, repo)
+
+    if not await set_active_and_get_group(repo, user["id"], group_id):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+
+    await _do_mark_dropped(callback.message, repo, group_id, edit=True)
+    await callback.answer()
+
+
+async def _do_mark_dropped(
+    message: Message,
+    repo: Repository,
+    group_id: int,
+    edit: bool = False,
+) -> None:
+    group = await repo.get_group(group_id)
+    item = await repo.mark_watching_dropped(group_id)
+
+    if item:
+        text = (
+            f"<b>{active_group_label(group)}</b>\n\n"
+            f"🚫 «{item['title']}» отмечен как брошенный.\n"
+            "Не понравилось — больше не будет выпадать в случайном выборе."
+        )
+    else:
+        text = (
+            f"<b>{active_group_label(group)}</b>\n\n"
+            "Нечего отмечать — сейчас ничего не выбрано для просмотра."
+        )
+
+    if edit:
+        await message.edit_text(text, reply_markup=main_menu_keyboard())
+    else:
+        await message.answer(text, reply_markup=main_menu_keyboard())

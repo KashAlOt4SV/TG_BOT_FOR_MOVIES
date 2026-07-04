@@ -9,7 +9,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from bot.config import load_config
 from bot.database import Database
 from bot.handlers import actions, groups, media, start, watch
-from bot.middlewares import RepositoryMiddleware, ResetStateOnMenuMiddleware
+from bot.middlewares import MovieLookupMiddleware, RepositoryMiddleware, ResetStateOnMenuMiddleware
+from bot.services.movie_lookup import MovieLookupService
 from bot.services.repository import Repository
 
 logging.basicConfig(
@@ -24,6 +25,10 @@ async def main() -> None:
     db = Database(config.database_path)
     await db.init()
     repo = Repository(db)
+    movie_lookup = MovieLookupService(
+        kinopoisk_api_key=config.kinopoisk_api_key,
+        omdb_api_key=config.omdb_api_key,
+    )
 
     bot = Bot(
         token=config.bot_token,
@@ -32,6 +37,7 @@ async def main() -> None:
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.middleware(ResetStateOnMenuMiddleware())
     dp.update.middleware(RepositoryMiddleware(repo))
+    dp.update.middleware(MovieLookupMiddleware(movie_lookup))
 
     dp.include_router(start.router)
     dp.include_router(groups.router)

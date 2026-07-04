@@ -3,10 +3,10 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 MAIN_MENU_BUTTONS = [
     ["🎬 Что посмотреть сегодня", "📺 Что смотрим"],
     ["➕ Предложить фильм", "🗑 Удалить из списка"],
-    ["✅ Отметить просмотренным", "📋 Списки"],
+    ["✅ Отметить просмотренным", "🚫 Бросили"],
+    ["📋 Списки", "👥 Мои группы"],
     ["🔄 Сменить группу", "🤝 Создать группу"],
-    ["👥 Мои группы", "⚙️ Управление группой"],
-    ["❓ Помощь"],
+    ["⚙️ Управление группой", "❓ Помощь"],
 ]
 
 MENU_BUTTON_TEXTS = frozenset(btn for row in MAIN_MENU_BUTTONS for btn in row)
@@ -64,7 +64,13 @@ def proposal_vote_keyboard(proposal_id: int) -> InlineKeyboardMarkup:
                     text="👎 Не согласен",
                     callback_data=f"proposal:reject:{proposal_id}",
                 ),
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    text="ℹ️ О фильме",
+                    callback_data=f"proposal:info:{proposal_id}",
+                ),
+            ],
         ]
     )
 
@@ -112,7 +118,12 @@ def watch_items_pick_keyboard(items: list[dict], prefix: str = "delpick") -> Inl
         title = item["title"]
         if len(title) > 45:
             title = title[:42] + "..."
-        status_mark = {"watching": "📺 ", "completed": "✅ ", "queued": ""}.get(item["status"], "")
+        status_mark = {
+            "watching": "📺 ",
+            "completed": "✅ ",
+            "dropped": "🚫 ",
+            "queued": "",
+        }.get(item["status"], "")
         buttons.append([
             InlineKeyboardButton(
                 text=f"{status_mark}{title}",
@@ -156,9 +167,15 @@ def group_detail_keyboard(group_id: int) -> InlineKeyboardMarkup:
                     text="📺 Сейчас смотрим",
                     callback_data=f"list:watching:{group_id}",
                 ),
+            ],
+            [
                 InlineKeyboardButton(
                     text="✅ Просмотрено",
                     callback_data=f"list:completed:{group_id}",
+                ),
+                InlineKeyboardButton(
+                    text="🚫 Бросили",
+                    callback_data=f"list:dropped:{group_id}",
                 ),
             ],
         ]

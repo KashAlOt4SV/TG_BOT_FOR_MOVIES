@@ -354,6 +354,7 @@ class Repository:
                             WHEN 'watching' THEN 0
                             WHEN 'queued' THEN 1
                             WHEN 'completed' THEN 2
+                            WHEN 'dropped' THEN 3
                         END,
                         created_at
                     """,
@@ -439,6 +440,32 @@ class Repository:
             )
             await conn.commit()
             item["status"] = "completed"
+            return item
+
+    async def mark_watching_dropped(self, group_id: int) -> dict[str, Any] | None:
+        async with self.db.connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT * FROM watch_items
+                WHERE group_id = ? AND status = 'watching'
+                LIMIT 1
+                """,
+                (group_id,),
+            )
+            item = await cursor.fetchone()
+            if not item:
+                return None
+            item = dict(item)
+            await conn.execute(
+                """
+                UPDATE watch_items
+                SET status = 'dropped', completed_at = datetime('now')
+                WHERE id = ?
+                """,
+                (item["id"],),
+            )
+            await conn.commit()
+            item["status"] = "dropped"
             return item
 
     async def get_group(self, group_id: int) -> dict[str, Any] | None:

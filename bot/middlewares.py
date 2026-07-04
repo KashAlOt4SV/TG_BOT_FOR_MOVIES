@@ -5,7 +5,22 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, TelegramObject
 
 from bot.keyboards import MENU_BUTTON_TEXTS
+from bot.services.movie_lookup import MovieLookupService
 from bot.services.repository import Repository
+
+
+class MovieLookupMiddleware(BaseMiddleware):
+    def __init__(self, movie_lookup: MovieLookupService):
+        self.movie_lookup = movie_lookup
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        data["movie_lookup"] = self.movie_lookup
+        return await handler(event, data)
 
 
 class ResetStateOnMenuMiddleware(BaseMiddleware):

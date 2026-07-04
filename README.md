@@ -168,10 +168,12 @@ tg_for_movie/
 
 ## Переменные окружения
 
-| Переменная       | Описание                          |
-|------------------|-----------------------------------|
-| `BOT_TOKEN`      | Токен от @BotFather (обязательно) |
-| `DATABASE_PATH`  | Путь к SQLite (по умолчанию `data/bot.db`) |
+| Переменная            | Описание                                                          |
+|-----------------------|-------------------------------------------------------------------|
+| `BOT_TOKEN`           | Токен от @BotFather (обязательно)                                 |
+| `DATABASE_PATH`       | Путь к SQLite (по умолчанию `data/bot.db`)                        |
+| `KINOPOISK_API_KEY`   | Ключ [kinopoiskapiunofficial.tech](https://kinopoiskapiunofficial.tech) для «О фильме» |
+| `OMDB_API_KEY`        | Ключ [omdbapi.com](https://www.omdbapi.com/apikey.aspx) для рейтинга IMDb (опционально) |
 
 ## Примечания
 
