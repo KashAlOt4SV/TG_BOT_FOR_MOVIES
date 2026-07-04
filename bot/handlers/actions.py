@@ -4,7 +4,7 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.handlers.common import (
     ensure_active_group,
-    require_groups,
+    notify_group_members,
     set_active_and_get_group,
     upsert_user_from_callback,
     upsert_user_from_message,
@@ -43,29 +43,6 @@ async def _send_action_votes(
                 member["telegram_id"],
                 vote_text,
                 reply_markup=action_vote_keyboard(group_action["id"]),
-            )
-        except Exception:
-            pass
-
-
-async def _notify_group_members(
-    bot: Bot,
-    repo: Repository,
-    group_id: int,
-    text: str,
-    *,
-    exclude_user_ids: set[int] | None = None,
-) -> None:
-    exclude = exclude_user_ids or set()
-    members = await repo.get_group_members(group_id)
-    for member in members:
-        if member["id"] in exclude:
-            continue
-        try:
-            await bot.send_message(
-                member["telegram_id"],
-                text,
-                reply_markup=main_menu_keyboard(),
             )
         except Exception:
             pass
@@ -402,7 +379,7 @@ async def handle_action_vote(
     executed = result.get("executed")
     if executed == "remove_item":
         notify = f"🗑 «<b>{group_action['title']}</b>» удалён из списка группы «{group['name']}»."
-        await _notify_group_members(bot, repo, group_action["group_id"], notify)
+        await notify_group_members(bot, repo, group_action["group_id"], notify)
         await callback.message.edit_text(
             f"✅ {voter_label} согласен — все проголосовали!\n"
             f"«{group_action['title']}» удалён из списка."
@@ -412,7 +389,7 @@ async def handle_action_vote(
         target = result["target_user"]
         target_label = display_name(target)
         notify = f"🎉 {target_label} добавлен в группу «{group['name']}»!"
-        await _notify_group_members(bot, repo, group_action["group_id"], notify)
+        await notify_group_members(bot, repo, group_action["group_id"], notify)
         try:
             await bot.send_message(
                 target["telegram_id"],
@@ -431,7 +408,7 @@ async def handle_action_vote(
         target = result["target_user"]
         target_label = display_name(target)
         notify = f"👤 {target_label} исключён из группы «{group['name']}»."
-        await _notify_group_members(
+        await notify_group_members(
             bot,
             repo,
             group_action["group_id"],

@@ -5,6 +5,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.handlers.common import (
     active_group_label,
     ensure_active_group,
+    notify_group_members,
     set_active_and_get_group,
     upsert_user_from_callback,
     upsert_user_from_message,
@@ -138,6 +139,27 @@ async def handle_proposal_vote(
     voter_label = display_name(user)
 
     if result["action"] == "rejected":
+        members = await repo.get_group_members(proposal["group_id"])
+        proposer = next(
+            (m for m in members if m["id"] == proposal["proposer_id"]),
+            None,
+        )
+        proposer_label = display_name(proposer) if proposer else "участник"
+
+        reject_notify = (
+            f"❌ {voter_label} отказался от просмотра:\n"
+            f"<b>{proposal['title']}</b>\n\n"
+            f"Группа: {group['name']}\n"
+            f"Предложил: {proposer_label}"
+        )
+        await notify_group_members(
+            bot,
+            repo,
+            proposal["group_id"],
+            reject_notify,
+            exclude_user_ids={user["id"]},
+        )
+
         await callback.message.edit_text(
             f"{voter_label} не согласен.\n"
             f"Предложение «{proposal['title']}» отклонено."
@@ -158,15 +180,7 @@ async def handle_proposal_vote(
         f"🎉 «<b>{proposal['title']}</b>» добавлен в список группы «{group['name']}»!\n"
         "Можно выбирать через «🎬 Что посмотреть сегодня»."
     )
-    for member in members:
-        try:
-            await bot.send_message(
-                member["telegram_id"],
-                notify,
-                reply_markup=main_menu_keyboard(),
-            )
-        except Exception:
-            pass
+    await notify_group_members(bot, repo, proposal["group_id"], notify)
 
     await callback.message.edit_text(
         f"✅ {voter_label} согласен — все проголосовали!\n"

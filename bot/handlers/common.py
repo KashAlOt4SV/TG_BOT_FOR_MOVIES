@@ -1,5 +1,6 @@
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram import Bot
 
 from bot.keyboards import group_select_keyboard, main_menu_keyboard
 from bot.services.repository import Repository
@@ -97,3 +98,26 @@ async def set_active_and_get_group(
         return None
     await repo.set_active_group(user_id, group_id)
     return await repo.get_group(group_id)
+
+
+async def notify_group_members(
+    bot: Bot,
+    repo: Repository,
+    group_id: int,
+    text: str,
+    *,
+    exclude_user_ids: set[int] | None = None,
+) -> None:
+    exclude = exclude_user_ids or set()
+    members = await repo.get_group_members(group_id)
+    for member in members:
+        if member["id"] in exclude:
+            continue
+        try:
+            await bot.send_message(
+                member["telegram_id"],
+                text,
+                reply_markup=main_menu_keyboard(),
+            )
+        except Exception:
+            pass
