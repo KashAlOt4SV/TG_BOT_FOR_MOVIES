@@ -7,3 +7,7 @@ class GroupCreation(StatesGroup):
 
 class MediaProposal(StatesGroup):
     waiting_title = State()
+
+
+class AddMember(StatesGroup):
+    waiting_username = State()

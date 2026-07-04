@@ -81,9 +81,36 @@ CREATE TABLE IF NOT EXISTS watch_items (
     FOREIGN KEY (added_by) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS group_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    initiator_id INTEGER NOT NULL,
+    action_type TEXT NOT NULL,
+    watch_item_id INTEGER,
+    target_user_id INTEGER,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (initiator_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (watch_item_id) REFERENCES watch_items(id) ON DELETE SET NULL,
+    FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS group_action_votes (
+    action_id INTEGER NOT NULL,
+    voter_id INTEGER NOT NULL,
+    approved INTEGER NOT NULL,
+    voted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (action_id, voter_id),
+    FOREIGN KEY (action_id) REFERENCES group_actions(id) ON DELETE CASCADE,
+    FOREIGN KEY (voter_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_watch_items_group_status ON watch_items(group_id, status);
+CREATE INDEX IF NOT EXISTS idx_group_actions_status ON group_actions(group_id, status);
 """
 
 

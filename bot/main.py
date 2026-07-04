@@ -8,7 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.config import load_config
 from bot.database import Database
-from bot.handlers import groups, media, start, watch
+from bot.handlers import actions, groups, media, start, watch
 from bot.middlewares import RepositoryMiddleware
 from bot.services.repository import Repository
 
@@ -36,6 +36,7 @@ async def main() -> None:
     dp.include_router(groups.router)
     dp.include_router(media.router)
     dp.include_router(watch.router)
+    dp.include_router(actions.router)
 
     logger.info("Bot started")
     await dp.start_polling(bot)

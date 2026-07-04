@@ -2,8 +2,9 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 
 MAIN_MENU_BUTTONS = [
     ["🎬 Что посмотреть сегодня", "📺 Что смотрим"],
-    ["➕ Предложить фильм", "✅ Отметить просмотренным"],
-    ["👥 Мои группы", "📋 Списки"],
+    ["➕ Предложить фильм", "🗑 Удалить из списка"],
+    ["✅ Отметить просмотренным", "📋 Списки"],
+    ["👥 Мои группы", "⚙️ Управление группой"],
     ["🤝 Создать группу", "❓ Помощь"],
 ]
 
@@ -59,6 +60,79 @@ def proposal_vote_keyboard(proposal_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def action_vote_keyboard(action_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="👍 Согласен",
+                    callback_data=f"action:approve:{action_id}",
+                ),
+                InlineKeyboardButton(
+                    text="👎 Не согласен",
+                    callback_data=f"action:reject:{action_id}",
+                ),
+            ]
+        ]
+    )
+
+
+def group_management_keyboard(group_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="➕ Добавить участника",
+                    callback_data=f"mgmt:add:{group_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="➖ Исключить участника",
+                    callback_data=f"mgmt:remove:{group_id}",
+                ),
+            ],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
+        ]
+    )
+
+
+def watch_items_pick_keyboard(items: list[dict], prefix: str = "delpick") -> InlineKeyboardMarkup:
+    buttons = []
+    for item in items[:25]:
+        title = item["title"]
+        if len(title) > 45:
+            title = title[:42] + "..."
+        status_mark = {"watching": "📺 ", "completed": "✅ ", "queued": ""}.get(item["status"], "")
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{status_mark}{title}",
+                callback_data=f"{prefix}:{item['id']}",
+            )
+        ])
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def members_pick_keyboard(
+    members: list[dict],
+    prefix: str = "rmpick",
+) -> InlineKeyboardMarkup:
+    buttons = []
+    for member in members:
+        name = member.get("username") or member.get("first_name") or "?"
+        if member.get("username"):
+            name = f"@{member['username']}"
+        buttons.append([
+            InlineKeyboardButton(
+                text=name,
+                callback_data=f"{prefix}:{member['id']}",
+            )
+        ])
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def group_detail_keyboard(group_id: int) -> InlineKeyboardMarkup:

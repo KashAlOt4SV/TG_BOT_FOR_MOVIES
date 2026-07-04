@@ -486,6 +486,204 @@ class Repository:
             rows = await cursor.fetchall()
             return [row["telegram_id"] for row in rows]
 
+    async def get_watch_item(self, item_id: int) -> dict[str, Any] | None:
+        async with self.db.connection() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM watch_items WHERE id = ?",
+                (item_id,),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def create_group_action(
+        self,
+        group_id: int,
+        initiator_id: int,
+        action_type: str,
+        *,
+        watch_item_id: int | None = None,
+        target_user_id: int | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        async with self.db.connection() as conn:
+            cursor = await conn.execute(
+                """
+                INSERT INTO group_actions
+                    (group_id, initiator_id, action_type, watch_item_id, target_user_id, title)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (group_id, initiator_id, action_type, watch_item_id, target_user_id, title),
+            )
+            action_id = cursor.lastrowid
+            await conn.commit()
+            return await self._get_group_action(conn, action_id)
+
+    async def get_group_action(self, action_id: int) -> dict[str, Any] | None:
+        async with self.db.connection() as conn:
+            return await self._get_group_action(conn, action_id)
+
+    async def vote_on_group_action(
+        self,
+        action_id: int,
+        voter_id: int,
+        approved: bool,
+    ) -> dict[str, Any] | None:
+        async with self.db.connection() as conn:
+            action = await self._get_group_action(conn, action_id)
+            if not action or action["status"] != "pending":
+                return None
+
+            required_voters = await self._get_required_voters(conn, action)
+            if voter_id not in required_voters:
+                return None
+
+            await conn.execute(
+                """
+                INSERT INTO group_action_votes (action_id, voter_id, approved)
+                VALUES (?, ?, ?)
+                ON CONFLICT(action_id, voter_id) DO UPDATE SET
+                    approved = excluded.approved,
+                    voted_at = datetime('now')
+                """,
+                (action_id, voter_id, 1 if approved else 0),
+            )
+
+            if not approved:
+                await conn.execute(
+                    "UPDATE group_actions SET status = 'rejected' WHERE id = ?",
+                    (action_id,),
+                )
+                await conn.commit()
+                return {"action": "rejected", "group_action": action}
+
+            votes_cursor = await conn.execute(
+                """
+                SELECT voter_id FROM group_action_votes
+                WHERE action_id = ? AND approved = 1
+                """,
+                (action_id,),
+            )
+            approved_voters = {row["voter_id"] for row in await votes_cursor.fetchall()}
+
+            if not set(required_voters).issubset(approved_voters):
+                await conn.commit()
+                return {"action": "vote_recorded", "group_action": action}
+
+            result = await self._execute_group_action(conn, action)
+            await conn.execute(
+                "UPDATE group_actions SET status = 'approved' WHERE id = ?",
+                (action_id,),
+            )
+            await conn.commit()
+            return {"action": "approved", "group_action": action, **result}
+
+    async def try_auto_approve_action(self, action_id: int) -> dict[str, Any] | None:
+        async with self.db.connection() as conn:
+            action = await self._get_group_action(conn, action_id)
+            if not action or action["status"] != "pending":
+                return None
+
+            required_voters = await self._get_required_voters(conn, action)
+            if required_voters:
+                return None
+
+            result = await self._execute_group_action(conn, action)
+            await conn.execute(
+                "UPDATE group_actions SET status = 'approved' WHERE id = ?",
+                (action_id,),
+            )
+            await conn.commit()
+            return {"action": "approved", "group_action": action, **result}
+
+    async def get_group_member_telegram_ids(self, group_id: int) -> list[int]:
+        async with self.db.connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT u.telegram_id
+                FROM users u
+                JOIN group_members gm ON gm.user_id = u.id
+                WHERE gm.group_id = ?
+                """,
+                (group_id,),
+            )
+            rows = await cursor.fetchall()
+            return [row["telegram_id"] for row in rows]
+
+    async def _get_group_action(
+        self,
+        conn: aiosqlite.Connection,
+        action_id: int,
+    ) -> dict[str, Any] | None:
+        cursor = await conn.execute(
+            "SELECT * FROM group_actions WHERE id = ?",
+            (action_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def _get_required_voters(
+        self,
+        conn: aiosqlite.Connection,
+        action: dict[str, Any],
+    ) -> set[int]:
+        members_cursor = await conn.execute(
+            "SELECT user_id FROM group_members WHERE group_id = ?",
+            (action["group_id"],),
+        )
+        member_ids = {row["user_id"] for row in await members_cursor.fetchall()}
+
+        if action["action_type"] in ("remove_item", "add_member"):
+            return member_ids - {action["initiator_id"]}
+
+        if action["action_type"] == "remove_member":
+            return member_ids - {action["target_user_id"]}
+
+        return set()
+
+    async def _execute_group_action(
+        self,
+        conn: aiosqlite.Connection,
+        action: dict[str, Any],
+    ) -> dict[str, Any]:
+        if action["action_type"] == "remove_item":
+            await conn.execute(
+                "DELETE FROM watch_items WHERE id = ?",
+                (action["watch_item_id"],),
+            )
+            return {"executed": "remove_item", "title": action["title"]}
+
+        if action["action_type"] == "add_member":
+            await conn.execute(
+                """
+                INSERT OR IGNORE INTO group_members (group_id, user_id)
+                VALUES (?, ?)
+                """,
+                (action["group_id"], action["target_user_id"]),
+            )
+            target = await conn.execute(
+                "SELECT * FROM users WHERE id = ?",
+                (action["target_user_id"],),
+            )
+            target_row = await target.fetchone()
+            return {"executed": "add_member", "target_user": dict(target_row)}
+
+        if action["action_type"] == "remove_member":
+            await conn.execute(
+                """
+                DELETE FROM group_members
+                WHERE group_id = ? AND user_id = ?
+                """,
+                (action["group_id"], action["target_user_id"]),
+            )
+            target = await conn.execute(
+                "SELECT * FROM users WHERE id = ?",
+                (action["target_user_id"],),
+            )
+            target_row = await target.fetchone()
+            return {"executed": "remove_member", "target_user": dict(target_row)}
+
+        return {}
+
     async def _get_user_by_telegram_id(
         self,
         conn: aiosqlite.Connection,
